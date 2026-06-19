@@ -286,7 +286,29 @@ typedef struct nvmlExcludedDeviceInfo_st                    nvmlExcludedDeviceIn
 typedef struct nvmlFBCSessionInfo_st                        nvmlFBCSessionInfo_t;
 typedef struct nvmlFBCStats_st                              nvmlFBCStats_t;
 typedef struct nvmlFanSpeedInfo_st                          nvmlFanSpeedInfo_t;
-typedef struct nvmlFieldValue_st                            nvmlFieldValue_t;
+/* Field value query — full definition needed by the bridge so
+ * nvmlDeviceGetFieldValues (see bridge/fieldvalues.go) can read the
+ * requested fieldId/scopeId and populate value/valueType/nvmlReturn.
+ * Layout matches the upstream NVML public header; nvmlValueType_t is
+ * already typedef'd (unsigned int) above. */
+typedef union nvmlValue_st {
+    double             dVal;    //!< If the value is double
+    int                siVal;   //!< If the value is signed int
+    unsigned int       uiVal;   //!< If the value is unsigned int
+    unsigned long      ulVal;   //!< If the value is unsigned long
+    unsigned long long ullVal;  //!< If the value is unsigned long long
+    signed long long   sllVal;  //!< If the value is signed long long
+    unsigned short     usVal;   //!< If the value is unsigned short
+} nvmlValue_t;
+typedef struct nvmlFieldValue_st {
+    unsigned int    fieldId;     //!< ID of the NVML field to retrieve
+    unsigned int    scopeId;     //!< Context (e.g. NVLink linkId) for fieldId
+    long long       timestamp;   //!< CPU timestamp in usec since 1970
+    long long       latencyUsec; //!< How long the field took to update (usec)
+    nvmlValueType_t valueType;   //!< Type of the value stored in value
+    nvmlReturn_t    nvmlReturn;  //!< Per-field return code; check before value
+    nvmlValue_t     value;       //!< Field value (valid iff nvmlReturn == SUCCESS)
+} nvmlFieldValue_t;
 typedef struct nvmlGpmMetricsGet_st                         nvmlGpmMetricsGet_t;
 /* GPM support - full definition needed by bridge */
 typedef struct nvmlGpmSupport_st {
@@ -390,7 +412,17 @@ typedef struct nvmlPowerValue_v2_st                         nvmlPowerValue_v2_t;
 typedef struct nvmlProcessDetailList_st                     nvmlProcessDetailList_t;
 typedef struct nvmlProcessInfo_v1_st                        nvmlProcessInfo_v1_t;
 typedef struct nvmlProcessInfo_v2_st                        nvmlProcessInfo_v2_t;
-typedef struct nvmlProcessUtilizationSample_st              nvmlProcessUtilizationSample_t;
+
+/* Process utilization sample */
+typedef struct nvmlProcessUtilizationSample_st
+{
+    unsigned int        pid;        //!< PID of process
+    unsigned long long  timeStamp;  //!< CPU Timestamp in microseconds
+    unsigned int        smUtil;     //!< SM (3D/Compute) Util Value
+    unsigned int        memUtil;    //!< Frame Buffer Memory Util Value
+    unsigned int        encUtil;    //!< Encoder Util Value
+    unsigned int        decUtil;    //!< Decoder Util Value
+} nvmlProcessUtilizationSample_t;
 typedef struct nvmlProcessesUtilizationInfo_st              nvmlProcessesUtilizationInfo_t;
 typedef struct nvmlRepairStatus_st                          nvmlRepairStatus_t;
 typedef struct nvmlRowRemapperHistogramValues_st            nvmlRowRemapperHistogramValues_t;
@@ -434,6 +466,17 @@ typedef struct nvmlViolationTime_st                         nvmlViolationTime_t;
 typedef struct nvmlWorkloadPowerProfileCurrentProfiles_st   nvmlWorkloadPowerProfileCurrentProfiles_t;
 typedef struct nvmlWorkloadPowerProfileProfilesInfo_st      nvmlWorkloadPowerProfileProfilesInfo_t;
 typedef struct nvmlWorkloadPowerProfileRequestedProfiles_st nvmlWorkloadPowerProfileRequestedProfiles_t;
+
+/*
+ * NVML 13.0 additions (go-nvml v0.13.1-0, #400). Only ever passed by pointer
+ * through NOT_SUPPORTED stubs, so opaque forward declarations are sufficient
+ * and ABI-safe.
+ */
+typedef struct nvmlHostname_v1_st                           nvmlHostname_v1_t;
+typedef struct nvmlPRMCounterList_v1_st                     nvmlPRMCounterList_v1_t;
+typedef struct nvmlRusdSettings_v1_st                       nvmlRusdSettings_v1_t;
+typedef struct nvmlUnrepairableMemoryStatus_v1_st           nvmlUnrepairableMemoryStatus_v1_t;
+typedef struct nvmlWorkloadPowerProfileUpdateProfiles_v1_st nvmlWorkloadPowerProfileUpdateProfiles_v1_t;
 
 #ifdef __cplusplus
 }

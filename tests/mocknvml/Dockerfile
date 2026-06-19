@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOLANG_VERSION=1.26.0
+ARG GOLANG_VERSION=1.26.4
 FROM golang:${GOLANG_VERSION} AS lib-builder
 
 WORKDIR /build
@@ -38,7 +38,7 @@ COPY tests/mocknvml/go.mod tests/mocknvml/go.sum* ./
 RUN go mod download
 
 COPY tests/mocknvml/*.go ./
-RUN CGO_ENABLED=1 go build -o mocknvml-test main.go
+RUN CGO_ENABLED=1 go build -o mocknvml-test .
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -52,6 +52,11 @@ WORKDIR /app
 
 # Copy the test binary
 COPY --from=test-builder /build/mocknvml-test /app/
+
+# Copy the test config fixture (a process with utilization, for the populated path).
+# The Makefile points MOCK_NVML_CONFIG at this so the integration test runs against
+# a real profile config rather than the env-var fallback.
+COPY tests/mocknvml/util-test-config.yaml /app/util-test-config.yaml
 
 # Copy the mock NVML library to /usr/local/lib (architecture-independent)
 COPY --from=lib-builder /build/pkg/gpu/mocknvml/libnvidia-ml.so* /usr/local/lib/

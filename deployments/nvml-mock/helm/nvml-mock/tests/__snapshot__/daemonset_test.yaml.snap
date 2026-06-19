@@ -8,7 +8,7 @@ should match snapshot with all overrides:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/name: nvml-mock
         app.kubernetes.io/version: 550.163.01
-        helm.sh/chart: nvml-mock-0.1.0
+        helm.sh/chart: nvml-mock-0.2.1
       name: nvml-mock-custom
     spec:
       selector:
@@ -18,7 +18,7 @@ should match snapshot with all overrides:
       template:
         metadata:
           annotations:
-            checksum/config: a61c6a3dddda8dbb6d6d0558d54f7687398def2880fdef692b995e798d8da71e
+            checksum/config: 787051305b6f43b315c462cacfd8f801526d31f91729045e22ff2ddce653ef48
           labels:
             app.kubernetes.io/instance: custom
             app.kubernetes.io/name: nvml-mock
@@ -37,8 +37,24 @@ should match snapshot with all overrides:
                       fieldPath: spec.nodeName
                 - name: MOCK_NVML_CONFIG
                   value: /etc/nvml-mock/config.yaml
+                - name: MOCK_FABRICMANAGER
+                  value: "on"
+                - name: MOCK_FABRICMANAGER_STATE_DIR
+                  value: /var/lib/nvml-mock/fabric-state
+                - name: MOCK_IB
+                  value: full
+                - name: MOCK_IB_PING_FABRIC
+                  value: "1"
+                - name: MOCK_IB_PING_PORT
+                  value: "18515"
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+                - name: MOCK_IB_PING_SERVICE_HOST
+                  value: nvml-mock-custom-ibping.gpu-system.svc.cluster.local
                 - name: LD_PRELOAD
-                  value: /usr/local/lib/libibmocksys.so.1
+                  value: /usr/local/lib/libibmockumad.so.1:/usr/local/lib/libibmockverbs.so.1:/usr/local/lib/libibmocksys.so.1
                 - name: MOCK_IB_ROOT
                   value: /var/lib/nvml-mock/ib
               image: custom-registry/nvml-mock:v2.0.0
@@ -49,6 +65,10 @@ should match snapshot with all overrides:
                     command:
                       - /scripts/cleanup.sh
               name: nvml-mock
+              ports:
+                - containerPort: 18515
+                  name: ibping
+                  protocol: TCP
               resources:
                 limits:
                   cpu: 500m
@@ -69,6 +89,8 @@ should match snapshot with all overrides:
                   name: host-cdi
                 - mountPath: /host/run/nvidia
                   name: host-run-nvidia
+                - mountPath: /var/lib/nvml-mock/fabric-state
+                  name: host-fabric-state
           nodeSelector:
             nvidia.com/gpu.present: "true"
           serviceAccountName: nvml-mock-custom
@@ -93,6 +115,10 @@ should match snapshot with all overrides:
                 path: /run/nvidia
                 type: DirectoryOrCreate
               name: host-run-nvidia
+            - hostPath:
+                path: /var/lib/nvml-mock/fabric-state
+                type: DirectoryOrCreate
+              name: host-fabric-state
       updateStrategy:
         rollingUpdate:
           maxUnavailable: 25%
@@ -107,7 +133,7 @@ should match snapshot with b200 profile:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/name: nvml-mock
         app.kubernetes.io/version: 550.163.01
-        helm.sh/chart: nvml-mock-0.1.0
+        helm.sh/chart: nvml-mock-0.2.1
       name: RELEASE-NAME-nvml-mock
     spec:
       selector:
@@ -117,7 +143,7 @@ should match snapshot with b200 profile:
       template:
         metadata:
           annotations:
-            checksum/config: 39b4be468d3038181d5a5eb63fb5fba75f8ffa2500bc0cba20a308246a0334ca
+            checksum/config: 4ab59c604e1085c8ec7053eada55fedefa12271b050269412744eaad9f13c68b
           labels:
             app.kubernetes.io/instance: RELEASE-NAME
             app.kubernetes.io/name: nvml-mock
@@ -136,8 +162,20 @@ should match snapshot with b200 profile:
                       fieldPath: spec.nodeName
                 - name: MOCK_NVML_CONFIG
                   value: /etc/nvml-mock/config.yaml
+                - name: MOCK_IB
+                  value: full
+                - name: MOCK_IB_PING_FABRIC
+                  value: "1"
+                - name: MOCK_IB_PING_PORT
+                  value: "18515"
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+                - name: MOCK_IB_PING_SERVICE_HOST
+                  value: RELEASE-NAME-nvml-mock-ibping.NAMESPACE.svc.cluster.local
                 - name: LD_PRELOAD
-                  value: /usr/local/lib/libibmocksys.so.1
+                  value: /usr/local/lib/libibmockumad.so.1:/usr/local/lib/libibmockverbs.so.1:/usr/local/lib/libibmocksys.so.1
                 - name: MOCK_IB_ROOT
                   value: /var/lib/nvml-mock/ib
               image: ghcr.io/nvidia/nvml-mock:latest
@@ -148,6 +186,10 @@ should match snapshot with b200 profile:
                     command:
                       - /scripts/cleanup.sh
               name: nvml-mock
+              ports:
+                - containerPort: 18515
+                  name: ibping
+                  protocol: TCP
               securityContext:
                 privileged: true
               volumeMounts:
@@ -195,7 +237,7 @@ should match snapshot with default values:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/name: nvml-mock
         app.kubernetes.io/version: 550.163.01
-        helm.sh/chart: nvml-mock-0.1.0
+        helm.sh/chart: nvml-mock-0.2.1
       name: RELEASE-NAME-nvml-mock
     spec:
       selector:
@@ -205,7 +247,7 @@ should match snapshot with default values:
       template:
         metadata:
           annotations:
-            checksum/config: 07b4e38538574cd5b7a6a50321a31a19e14d80a5b43771dff9710afb61c6f563
+            checksum/config: 7378a4b9df71acdd4160488ec177b81cd691948f1e9c61b3802198c9a88a000c
           labels:
             app.kubernetes.io/instance: RELEASE-NAME
             app.kubernetes.io/name: nvml-mock
@@ -224,8 +266,24 @@ should match snapshot with default values:
                       fieldPath: spec.nodeName
                 - name: MOCK_NVML_CONFIG
                   value: /etc/nvml-mock/config.yaml
+                - name: MOCK_FABRICMANAGER
+                  value: "on"
+                - name: MOCK_FABRICMANAGER_STATE_DIR
+                  value: /var/lib/nvml-mock/fabric-state
+                - name: MOCK_IB
+                  value: full
+                - name: MOCK_IB_PING_FABRIC
+                  value: "1"
+                - name: MOCK_IB_PING_PORT
+                  value: "18515"
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+                - name: MOCK_IB_PING_SERVICE_HOST
+                  value: RELEASE-NAME-nvml-mock-ibping.NAMESPACE.svc.cluster.local
                 - name: LD_PRELOAD
-                  value: /usr/local/lib/libibmocksys.so.1
+                  value: /usr/local/lib/libibmockumad.so.1:/usr/local/lib/libibmockverbs.so.1:/usr/local/lib/libibmocksys.so.1
                 - name: MOCK_IB_ROOT
                   value: /var/lib/nvml-mock/ib
               image: ghcr.io/nvidia/nvml-mock:latest
@@ -236,6 +294,10 @@ should match snapshot with default values:
                     command:
                       - /scripts/cleanup.sh
               name: nvml-mock
+              ports:
+                - containerPort: 18515
+                  name: ibping
+                  protocol: TCP
               securityContext:
                 privileged: true
               volumeMounts:
@@ -249,6 +311,8 @@ should match snapshot with default values:
                   name: host-cdi
                 - mountPath: /host/run/nvidia
                   name: host-run-nvidia
+                - mountPath: /var/lib/nvml-mock/fabric-state
+                  name: host-fabric-state
           serviceAccountName: RELEASE-NAME-nvml-mock
           terminationGracePeriodSeconds: 10
           tolerations:
@@ -269,6 +333,10 @@ should match snapshot with default values:
                 path: /run/nvidia
                 type: DirectoryOrCreate
               name: host-run-nvidia
+            - hostPath:
+                path: /var/lib/nvml-mock/fabric-state
+                type: DirectoryOrCreate
+              name: host-fabric-state
       updateStrategy:
         rollingUpdate:
           maxUnavailable: 25%

@@ -3,7 +3,12 @@
 
 gpu:
   profile: a100           # a100 | h100 | b200 | gb200 | gb300 | l40s | t4
-  count: 8
+  # Number of GPUs to expose. Empty (default) derives the count from the
+  # selected profile's `devices:` list (t4 -> 4, all NVSwitch baseboards/NVL
+  # slices -> 8), so the profile is the single source of truth. Set to a
+  # positive integer to force a smaller/larger slice; setup.sh caps it to the
+  # profile's device count at runtime.
+  count: ""
   customConfig: ""
 
   # Opt-in: make GetTemperature / GetPowerUsage / GetUtilizationRates return
@@ -91,6 +96,38 @@ topology:
   #         nodes: [kind-worker3, kind-worker4]
   domains: []
 
+# InfiniBand ping mock. For profiles with infiniband.enabled=true, the
+# DaemonSet preloads libibmockumad alongside libibmocksys, starts mock-ib via
+# the container entrypoint, exposes a headless Service on `ping.port`, and sets
+# MOCK_IB / MOCK_IB_PING_FABRIC so ibping can reach peer pods.
+#
+# MOCK_IB is a tri-state mock tier:
+#   full  -> all shims (libibmocksys sysfs, libibmockumad UMAD, libibmockverbs
+#            verbs) + the mock-ib daemon. Enables
+#            ibstat/ibstatus/ibping/iblinkinfo/ibv_devinfo.
+#   sysfs -> libibmocksys sysfs redirection only (ibstat/ibstatus; no daemon).
+#   off   -> every shim is a no-op (real host).
+# The shims stay LD_PRELOAD'd in every container process regardless of tier and
+# no-op when MOCK_IB=off, so `MOCK_IB=off <cmd>` is the per-command escape hatch.
+infiniband:
+  # mockTier sets the container's MOCK_IB value: off | sysfs | full.
+  # Defaults to "full" for InfiniBand-enabled profiles and "sysfs" for non-IB
+  # profiles (sysfs keeps the libibmocksys redirect active so any real host IB
+  # is masked, i.e. ibstat reports 0 HCAs). Leaving this empty auto-derives
+  # that per profile. Set it explicitly to override (an invalid value fails
+  # `helm template`).
+  mockTier: ""
+  ping:
+    port: 18515
+    # The mock-ib TCP fabric listener binds 0.0.0.0:<port> with no auth and
+    # the DaemonSet runs privileged. This NetworkPolicy restricts inbound
+    # access to that port to peer nvml-mock pods (the only legitimate
+    # clients), limiting the blast radius on clusters whose CNI enforces
+    # NetworkPolicy. NOTE: Kind's default CNI (kindnet) does NOT enforce
+    # NetworkPolicy, so this is a no-op there; it matters on Calico/Cilium.
+    networkPolicy:
+      enabled: true
+
 # Fake IMEX coordination. When `imex.enabled` is true the chart mounts a
 # hostPath state directory into the nvml-mock pod so the fake nvidia-imex
 # / nvidia-imex-ctl binaries (compiled into the image) can coordinate
@@ -100,6 +137,25 @@ topology:
 imex:
   enabled: false
   stateDir: /var/lib/nvml-mock/imex-state
+
+# Fake nvidia-fabricmanager. NVSwitch platforms (HGX H100 / GB200 / GB300)
+# run nvidia-fabricmanager to register GPUs with the NVSwitch fabric. When
+# enabled the entrypoint starts the fake nvidia-fabricmanager daemon (baked
+# into the image), which writes a node-local readiness marker under
+# `stateDir`. The mock NVML engine reads that marker to resolve each GPU's
+# fabric state for profiles that set `fabric.state: auto` (GB200/GB300/H100):
+# IN_PROGRESS until the daemon is ready, COMPLETED once it is.
+#
+# `enabled` is a tri-state override and is derived from the GPU profile by
+# default — leave it empty and the chart starts the daemon when the profile
+# declares NVSwitches (`nvlink.switches`) or sets `device_defaults.fabric.state:
+# auto` (same pattern as infiniband.mockTier). A100 runs the legacy daemon
+# (NVSwitch baseboard, no GpuFabricInfo API); standalone B200/L40S/T4 declare
+# no NVSwitches and do not start the daemon. Set to true/false to force it
+# regardless of profile (e.g. with gpu.customConfig).
+fabricmanager:
+  enabled: ""
+  stateDir: /var/lib/nvml-mock/fabric-state
 
 # Integration with external projects
 integrations:

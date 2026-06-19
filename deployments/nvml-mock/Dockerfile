@@ -12,37 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOLANG_VERSION=1.26
+ARG GOLANG_VERSION=1.26.4
 FROM golang:${GOLANG_VERSION}-bookworm AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
 COPY pkg/gpu/mocknvml/ pkg/gpu/mocknvml/
 COPY pkg/gpu/mockcuda/ pkg/gpu/mockcuda/
-COPY pkg/network/mockibsysfs/ pkg/network/mockibsysfs/
+COPY pkg/network/mockib/ pkg/network/mockib/
 COPY pkg/system/mockpcisysfs/ pkg/system/mockpcisysfs/
 COPY pkg/imexcoord/ pkg/imexcoord/
-COPY cmd/render-ib-sysfs/ cmd/render-ib-sysfs/
+COPY pkg/fmcoord/ pkg/fmcoord/
+COPY cmd/mock-ib/ cmd/mock-ib/
 COPY cmd/render-pci-sysfs/ cmd/render-pci-sysfs/
 COPY cmd/fake-imex/ cmd/fake-imex/
+COPY cmd/fake-fabricmanager/ cmd/fake-fabricmanager/
 COPY cmd/check-fabric/ cmd/check-fabric/
 RUN cd pkg/gpu/mocknvml && make clean && make
 RUN cd pkg/gpu/mockcuda && make clean && make
-RUN cd pkg/network/mockibsysfs && make clean && make
+RUN cd pkg/network/mockib && make clean && make
 RUN mkdir -p /out \
-    && go build -mod=vendor -o /out/render-ib-sysfs  ./cmd/render-ib-sysfs \
+    && go build -mod=vendor -o /out/mock-ib ./cmd/mock-ib \
     && go build -mod=vendor -o /out/render-pci-sysfs ./cmd/render-pci-sysfs \
-    && go build -mod=vendor -o /out/nvidia-imex      ./cmd/fake-imex/daemon \
-    && go build -mod=vendor -o /out/nvidia-imex-ctl  ./cmd/fake-imex/ctl \
-    && go build -mod=vendor -o /out/check-fabric     ./cmd/check-fabric
+    && go build -mod=vendor -o /out/nvidia-imex     ./cmd/fake-imex/daemon \
+    && go build -mod=vendor -o /out/nvidia-imex-ctl ./cmd/fake-imex/ctl \
+    && go build -mod=vendor -o /out/nv-fabricmanager     ./cmd/fake-fabricmanager/daemon \
+    && go build -mod=vendor -o /out/nv-fabricmanager-ctl ./cmd/fake-fabricmanager/ctl \
+    && go build -mod=vendor -o /out/check-fabric    ./cmd/check-fabric
 
 FROM debian:bookworm-slim
-ARG KUBECTL_VERSION=v1.32.0
+ARG KUBECTL_VERSION=v1.36.1
 ARG TARGETARCH
 COPY --from=builder /src/pkg/gpu/mocknvml/libnvidia-ml.so.* /usr/local/lib/
 COPY --from=builder /src/pkg/gpu/mockcuda/libcuda.so.* /usr/local/lib/
-COPY --from=builder /src/pkg/network/mockibsysfs/libibmocksys.so.* /usr/local/lib/
-COPY --from=builder /out/render-ib-sysfs  /usr/local/bin/render-ib-sysfs
+COPY --from=builder /src/pkg/network/mockib/libibmocksys.so.* /usr/local/lib/
+COPY --from=builder /src/pkg/network/mockib/libibmockumad.so.* /usr/local/lib/
+COPY --from=builder /src/pkg/network/mockib/libibmockverbs.so.* /usr/local/lib/
+COPY --from=builder /out/mock-ib /usr/local/bin/mock-ib
 COPY --from=builder /out/render-pci-sysfs /usr/local/bin/render-pci-sysfs
 # Fake IMEX binaries used for ComputeDomain simulation on KIND. Installed
 # at the same paths the upstream compute-domain-daemon expects in $PATH,
@@ -50,6 +56,12 @@ COPY --from=builder /out/render-pci-sysfs /usr/local/bin/render-pci-sysfs
 # COPY them straight from this image. See NVIDIA/k8s-test-infra#304.
 COPY --from=builder /out/nvidia-imex     /usr/bin/nvidia-imex
 COPY --from=builder /out/nvidia-imex-ctl /usr/bin/nvidia-imex-ctl
+# Fake nvidia-fabricmanager binaries for NVSwitch (HGX/GB200) simulation on
+# KIND. The daemon (started from setup.sh when fabricmanager is enabled)
+# writes a node-local readiness marker the mock NVML library reads to resolve
+# a GPU's fabric state ("auto"). See NVIDIA/k8s-test-infra#371.
+COPY --from=builder /out/nv-fabricmanager     /usr/bin/nv-fabricmanager
+COPY --from=builder /out/nv-fabricmanager-ctl /usr/bin/nv-fabricmanager-ctl
 # check-fabric: tiny Go consumer that calls nvmlDeviceGetGpuFabricInfo
 # via the LD_PRELOAD'd mock library. Used by docs/demo/compute-domain
 # to confirm the topology overlay assigned the expected clique to each
@@ -58,8 +70,13 @@ COPY --from=builder /out/check-fabric    /usr/local/bin/check-fabric
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg2 \
-        infiniband-diags rdma-core; \
+        infiniband-diags rdma-core ibverbs-utils ibverbs-providers; \
     rm -rf /var/lib/apt/lists/*; \
+    # libibverbs prints "couldn't open config directory '/etc/libibverbs.d'"
+    # when the dir is missing. ibverbs-providers ships .driver files there,
+    # but keep an explicit mkdir as a belt-and-braces guarantee so the
+    # warning never appears even if the providers package is purged. \
+    mkdir -p /etc/libibverbs.d; \
     curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl"; \
     curl -fsSLo /tmp/kubectl.sha256 \
@@ -67,8 +84,13 @@ RUN set -eux; \
     echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum --check; \
     chmod +x /usr/local/bin/kubectl; \
     rm /tmp/kubectl.sha256; \
-    # Extract nvidia-smi binary from nvidia-utils package (no full install needed).
-    # Use Ubuntu 22.04 repo (binary-compatible with Debian bookworm, has nvidia-utils-550).
+    # Extract just the nvidia-smi binary from nvidia-utils (Ubuntu 22.04 repo:
+    # glibc 2.35, runs on bookworm). The 580 branch renders the full GB200/GB300
+    # NVLink5 surface (`nvlink -e/-info/-gLowPwrInfo/-gLWidth`); older binaries
+    # only show the legacy layout, though the mock implements the fields either
+    # way. Pin 580.65.06-0ubuntu1: it's the only nvidia-utils-580 here that ships
+    # the binary (later 580.x are transitional dummies) and matches the GB200
+    # profile's driver_version. See NVIDIA/k8s-test-infra#371.
     # Map TARGETARCH to NVIDIA repo path: amd64 → x86_64, arm64 → sbsa.
     NVIDIA_REPO_ARCH=$(case ${TARGETARCH} in arm64) echo sbsa;; *) echo x86_64;; esac); \
     curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/${NVIDIA_REPO_ARCH}/3bf863cc.pub" | \
@@ -76,8 +98,8 @@ RUN set -eux; \
     echo "deb [signed-by=/usr/share/keyrings/nvidia.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/${NVIDIA_REPO_ARCH} /" \
       > /etc/apt/sources.list.d/nvidia.list; \
     apt-get update; \
-    cd /tmp && apt-get download nvidia-utils-550; \
-    dpkg-deb -x /tmp/nvidia-utils-550*.deb /tmp/nvidia-utils; \
+    cd /tmp && apt-get download nvidia-utils-580=580.65.06-0ubuntu1; \
+    dpkg-deb -x /tmp/nvidia-utils-580*.deb /tmp/nvidia-utils; \
     cp /tmp/nvidia-utils/usr/bin/nvidia-smi /usr/local/bin/nvidia-smi; \
     chmod +x /usr/local/bin/nvidia-smi; \
     # Set RPATH so nvidia-smi finds libs relative to its own location ($ORIGIN/../lib64).
@@ -86,7 +108,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends patchelf; \
     patchelf --set-rpath '$ORIGIN/../lib64' /usr/local/bin/nvidia-smi; \
     rm -rf /var/lib/apt/lists/*; \
-    rm -rf /tmp/nvidia-utils /tmp/nvidia-utils-550*.deb \
+    rm -rf /tmp/nvidia-utils /tmp/nvidia-utils-580*.deb \
            /usr/share/keyrings/nvidia.gpg /etc/apt/sources.list.d/nvidia.list; \
     apt-get purge -y --auto-remove curl ca-certificates gnupg2 patchelf
 COPY deployments/nvml-mock/scripts/ /scripts/
